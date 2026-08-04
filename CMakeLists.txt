@@ -351,7 +351,10 @@ else()
         endif()
 
         if (OPTION_CMP_OPENCV)
-            find_package(OpenCV)
+            find_package(OpenCV COMPONENTS core imgproc highgui imgcodecs)
+            if (OpenCV_FOUND)
+                set(OpenCV_LIBRARIES opencv_core opencv_imgproc opencv_highgui opencv_imgcodecs)
+            endif()
             if (NOT OpenCV_FOUND)
                 message(WARNING "Package OpenCV not found. CMP features using OpenCV will be disabled"
                     "In Unix, run initsetup_unix.sh or sudo apt-get install "

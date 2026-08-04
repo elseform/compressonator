@@ -98,10 +98,71 @@ target_include_directories(CMP_Core_AVX512 PRIVATE source shaders)
 if (WIN32)
     target_compile_options(CMP_Core_AVX512 PRIVATE /arch:AVX-512)
 else()
-    target_compile_options(CMP_Core_AVX512 PRIVATE -march=knl)
+    target_compile_options(CMP_Core_AVX512 PRIVATE -march=skylake-avx512)
 endif()
 
 set_target_properties(CMP_Core_AVX512 PROPERTIES FOLDER ${PROJECT_FOLDER_SDK_LIBS})
 
 # Link SIMD libraries to CMP_Core
 target_link_libraries(CMP_Core PRIVATE CMP_Core_SSE CMP_Core_AVX CMP_Core_AVX512)
+
+# ------------------------------------------------------------------------
+# Optional: route the CPU BC7 encoder through richgel999/bc7enc_rdo's
+# bc7e.ispc SIMD encoder. Additive — stock BC7BlockEncoder stays in place
+# and is selected when this option is OFF.
+# ------------------------------------------------------------------------
+option(OPTION_CMP_USE_BC7ENC_RDO "Route CPU BC7 encode through bc7enc_rdo (bc7e.ispc)" OFF)
+
+if (OPTION_CMP_USE_BC7ENC_RDO)
+    set(BC7ENC_RDO_DIR "${CMAKE_SOURCE_DIR}/../bc7enc_rdo" CACHE PATH
+        "Path to richgel999/bc7enc_rdo checkout")
+    set(BC7ENC_RDO_ISPC "${CMAKE_SOURCE_DIR}/../tools/ispc/linux/bin/ispc" CACHE FILEPATH
+        "Path to the ispc compiler binary")
+
+    if (NOT EXISTS "${BC7ENC_RDO_DIR}/bc7e.ispc")
+        message(FATAL_ERROR "OPTION_CMP_USE_BC7ENC_RDO=ON but ${BC7ENC_RDO_DIR}/bc7e.ispc not found. Set BC7ENC_RDO_DIR to the bc7enc_rdo checkout.")
+    endif()
+    if (NOT EXISTS "${BC7ENC_RDO_ISPC}")
+        message(FATAL_ERROR "OPTION_CMP_USE_BC7ENC_RDO=ON but ispc binary not found at ${BC7ENC_RDO_ISPC}. Set BC7ENC_RDO_ISPC.")
+    endif()
+
+    set(BC7E_OBJ_DIR "${CMAKE_CURRENT_BINARY_DIR}/bc7e_ispc")
+    file(MAKE_DIRECTORY "${BC7E_OBJ_DIR}")
+
+    set(BC7E_OBJS
+        "${BC7E_OBJ_DIR}/bc7e.o"
+        "${BC7E_OBJ_DIR}/bc7e_sse2.o"
+        "${BC7E_OBJ_DIR}/bc7e_sse4.o"
+        "${BC7E_OBJ_DIR}/bc7e_avx.o"
+        "${BC7E_OBJ_DIR}/bc7e_avx2.o"
+    )
+    set(BC7E_HEADER "${BC7E_OBJ_DIR}/bc7e_ispc.h")
+
+    add_custom_command(
+        OUTPUT ${BC7E_OBJS} ${BC7E_HEADER}
+        COMMAND ${BC7ENC_RDO_ISPC} --pic -g -O2
+                "${BC7ENC_RDO_DIR}/bc7e.ispc"
+                -o "${BC7E_OBJ_DIR}/bc7e.o"
+                -h "${BC7E_HEADER}"
+                --target=sse2,sse4,avx,avx2
+                --opt=fast-math --opt=disable-assertions
+        DEPENDS "${BC7ENC_RDO_DIR}/bc7e.ispc"
+        COMMENT "Generating bc7e.ispc objects for CMP_Core"
+        VERBATIM
+    )
+
+    add_custom_target(cmp_core_bc7e_ispc DEPENDS ${BC7E_OBJS} ${BC7E_HEADER})
+    add_dependencies(CMP_Core cmp_core_bc7e_ispc)
+
+    target_sources(CMP_Core PRIVATE
+        source/bc7enc_rdo_adapter.h
+        source/bc7enc_rdo_adapter.cpp
+        ${BC7E_OBJS}
+    )
+    set_source_files_properties(${BC7E_OBJS} PROPERTIES
+        EXTERNAL_OBJECT TRUE
+        GENERATED TRUE
+    )
+    target_include_directories(CMP_Core PRIVATE "${BC7E_OBJ_DIR}")
+    target_compile_definitions(CMP_Core PUBLIC CMP_USE_BC7ENC_RDO=1)
+endif()
