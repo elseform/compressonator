@@ -38,6 +38,10 @@
 #include "shake.h"
 #include "debug.h"
 
+#ifdef CMP_USE_BC7ENC_RDO
+#include "bc7enc_rdo_adapter.h"
+#endif
+
 //#ifdef USE_CMP_CORE_API
 //#include "bcn_common_kernel.h"
 //#include "bcn_common_api.h"
@@ -1273,6 +1277,14 @@ double BC7BlockEncoder::CompressBlock(double in[MAX_SUBSET_SIZE][MAX_DIMENSION_B
 {
 #ifdef USE_DBGTRACE
     DbgTrace(());
+#endif
+#ifdef CMP_USE_BC7ENC_RDO
+    // Additive hook: route the CPU block encode through richgel999's
+    // bc7e.ispc SIMD encoder. Stock BC7BlockEncoder below stays intact
+    // for A/B comparison — flipping the CMP_USE_BC7ENC_RDO CMake option
+    // is what selects between them at build time.
+    CompressBlockBC7_bc7enc_from_double(reinterpret_cast<const double(*)[4]>(in), out);
+    return 0.0;
 #endif
     CMP_DWORD i, j;
     CMP_BOOL  blockNeedsAlpha   = FALSE;

@@ -27,6 +27,8 @@ build/sdk/bin/*
 build/TEMP/*
 build/Debug*
 build/Release*
+build_cli/
+build_cli_off/
 
 */shaders/compiled/*
 internal/tests/output/*
