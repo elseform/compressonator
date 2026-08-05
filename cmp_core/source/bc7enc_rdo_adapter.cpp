@@ -90,6 +90,31 @@ void restrict_modes_67(ispc::bc7e_compress_block_params* p,
     }
 }
 
+// Defensive guard: bc7e's handle_alpha_block / handle_opaque_block leave
+// opt_results.m_mode uninitialized when every mode in the corresponding
+// settings block is disabled, then encode_bc7_block reads the garbage
+// mode and crashes on the resulting out-of-bounds bit-writes. This can
+// happen when ModeMask + colourRestrict/alphaRestrict together disable
+// every mode a block needs. Stock Compressonator hits the same latent
+// condition but its release-mode block loop simply falls through with
+// no output written, silently producing garbage. Detect the "restricted
+// variant has no valid modes for this alpha class" case so we can route
+// affected blocks to the unrestricted variant instead of crashing.
+bool has_any_alpha_mode(const ispc::bc7e_compress_block_params* p)
+{
+    return p->m_alpha_settings.m_use_mode4
+        || p->m_alpha_settings.m_use_mode5
+        || p->m_alpha_settings.m_use_mode6
+        || p->m_alpha_settings.m_use_mode7;
+}
+
+bool has_any_opaque_mode(const ispc::bc7e_compress_block_params* p)
+{
+    for (int i = 0; i < 7; ++i)
+        if (p->m_opaque_settings.m_use_mode[i]) return true;
+    return false;
+}
+
 // Thread-local cache. Options usually stay constant across a stripe, so a
 // single-slot cache resolves ~100% of calls without re-running the preset
 // init (which memsets and populates ~15 fields).
@@ -98,6 +123,11 @@ struct params_pair
     ispc::bc7e_compress_block_params m_default;
     ispc::bc7e_compress_block_params m_restricted;
     bool                             m_has_restricted;
+    // Fallback guards — see has_any_alpha_mode / has_any_opaque_mode.
+    // Cleared when the restricted variant would leave a block-type unencodable,
+    // in which case choose_params falls back to m_default for that block.
+    bool                             m_restricted_alpha_ok;
+    bool                             m_restricted_opaque_ok;
     double                           m_key_quality;
     uint8_t                          m_key_mask;
     bool                             m_key_colour;
@@ -129,6 +159,13 @@ void build_params_pair(const CMP_bc7enc_Options& o, params_pair& out)
         std::memcpy(&out.m_restricted, &out.m_default, sizeof(out.m_default));
         restrict_modes_67(&out.m_restricted,
                           o.colourRestrict != 0, o.alphaRestrict != 0);
+        out.m_restricted_alpha_ok  = has_any_alpha_mode(&out.m_restricted);
+        out.m_restricted_opaque_ok = has_any_opaque_mode(&out.m_restricted);
+    }
+    else
+    {
+        out.m_restricted_alpha_ok  = true;
+        out.m_restricted_opaque_ok = true;
     }
     out.m_key_quality    = o.quality;
     out.m_key_mask       = o.validModeMask;
@@ -152,8 +189,10 @@ choose_params(const uint32_t pixels[16], const params_pair& pp,
         if (a != 255)             blockNeedsAlpha   = true;
         if (a == 0 || a == 255)   blockAlphaZeroOne = true;
     }
-    if (colourRestrict && !blockNeedsAlpha)                        return &pp.m_restricted;
-    if (alphaRestrict  &&  blockNeedsAlpha && blockAlphaZeroOne)   return &pp.m_restricted;
+    if (colourRestrict && !blockNeedsAlpha && pp.m_restricted_opaque_ok)
+        return &pp.m_restricted;
+    if (alphaRestrict  &&  blockNeedsAlpha && blockAlphaZeroOne && pp.m_restricted_alpha_ok)
+        return &pp.m_restricted;
     return &pp.m_default;
 }
 
