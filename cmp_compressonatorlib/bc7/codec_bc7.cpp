@@ -73,7 +73,22 @@ unsigned int BC7ThreadProcEncode(void* param)
     {
         if (tp->run == TRUE)
         {
-            tp->encoder->CompressBlock(tp->in, tp->out);
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+            if (tp->batch_count > 0)
+            {
+                // Batch dispatch: consume tp->batch_in[0..count-1] via bc7e.
+                CompressBlockBC7_bc7enc_batch_from_double(
+                    tp->bctx,
+                    reinterpret_cast<const double*>(tp->batch_in),
+                    tp->out,
+                    tp->batch_count);
+                tp->batch_count = 0;
+            }
+            else
+#endif
+            {
+                tp->encoder->CompressBlock(tp->in, tp->out);
+            }
             tp->run = FALSE;
         }
 
@@ -245,6 +260,13 @@ CCodec_BC7::~CCodec_BC7()
                 delete m_encoder[i];
                 m_encoder[i] = NULL;
             }
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+            if (m_bctx[i])
+            {
+                CompressBlockBC7_bc7enc_batch_destroy(m_bctx[i]);
+                m_bctx[i] = NULL;
+            }
+#endif
         }
 
         if (m_decoder)
@@ -331,6 +353,26 @@ CodecError CCodec_BC7::InitializeBC7Library()
 #endif
         }
 
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+        // Build one bc7e batch context per worker from the (already-set)
+        // codec options. Same rescue rule as the per-block hook path:
+        // validModeMask==0 → 0xCF (matches BC7BlockEncoder ctor at
+        // bc7_encode.h:50-53).
+        {
+            const CMP_DWORD safeModeMask = (m_ModeMask == 0) ? 0xCF : m_ModeMask;
+            CMP_bc7enc_Options opts;
+            opts.quality        = m_Quality;
+            opts.validModeMask  = static_cast<unsigned char>(safeModeMask & 0xFF);
+            opts.colourRestrict = m_ColourRestrict ? 1 : 0;
+            opts.alphaRestrict  = m_AlphaRestrict  ? 1 : 0;
+            opts.perceptual     = 0;
+            for (CMP_INT k = 0; k < MAX_BC7_THREADS; k++)
+                m_bctx[k] = NULL;
+            for (CMP_INT k = 0; k < m_NumEncodingThreads; k++)
+                m_bctx[k] = CompressBlockBC7_bc7enc_batch_create(&opts);
+        }
+#endif
+
         // Create the encoding threads
         for (i = 0; i < m_NumEncodingThreads; i++)
         {
@@ -340,6 +382,10 @@ CodecError CCodec_BC7::InitializeBC7Library()
             // but that it should wait for some and not exit
             m_EncodeParameterStorage[i].run  = FALSE;
             m_EncodeParameterStorage[i].exit = FALSE;
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+            m_EncodeParameterStorage[i].batch_count = 0;
+            m_EncodeParameterStorage[i].bctx        = m_bctx[i];
+#endif
 
             m_EncodingThreadHandle[i] = std::thread(BC7ThreadProcEncode, (void*)&m_EncodeParameterStorage[i]);
             m_LiveThreads++;
@@ -421,6 +467,51 @@ CodecError CCodec_BC7::EncodeBC7Block(double in[BC7_BLOCK_PIXELS][MAX_DIMENSION_
     }
     return CE_OK;
 }
+
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+int CCodec_BC7::AcquireIdleWorker()
+{
+    // Round-robin scan from m_LastThread until any worker has run==FALSE.
+    // Mirrors EncodeBC7Block's find-idle logic. Single-threaded case
+    // (m_Use_MultiThreading==false) always picks slot 0 and runs
+    // synchronously — see DispatchBatch.
+    if (!m_Use_MultiThreading)
+        return 0;
+
+    CMP_WORD threadIndex = m_LastThread;
+    while (true)
+    {
+        if (m_EncodeParameterStorage[threadIndex].run == FALSE)
+        {
+            m_LastThread = threadIndex;
+            return threadIndex;
+        }
+        threadIndex++;
+        if (threadIndex == m_LiveThreads)
+            threadIndex = 0;
+    }
+}
+
+void CCodec_BC7::DispatchBatch(int slot, unsigned int count, CMP_BYTE* out)
+{
+    m_EncodeParameterStorage[slot].out         = out;
+    m_EncodeParameterStorage[slot].batch_count = count;
+    if (m_Use_MultiThreading)
+    {
+        m_EncodeParameterStorage[slot].run = TRUE;
+    }
+    else
+    {
+        // Single-thread synchronous dispatch — no worker to signal.
+        CompressBlockBC7_bc7enc_batch_from_double(
+            m_EncodeParameterStorage[slot].bctx,
+            reinterpret_cast<const double*>(m_EncodeParameterStorage[slot].batch_in),
+            out,
+            count);
+        m_EncodeParameterStorage[slot].batch_count = 0;
+    }
+}
+#endif
 
 CodecError CCodec_BC7::FinishBC7Encoding(void)
 {
@@ -553,32 +644,22 @@ CodecError CCodec_BC7::Compress(CCodecBuffer& bufferIn, CCodecBuffer& bufferOut,
 #endif
 
 #if defined(CMP_USE_BC7ENC_RDO) && defined(CMP_USE_BC7ENC_RDO_BATCH)
-    // ---- Batched producer path (Phase 3 part 5) --------------------------
-    // Bypasses the per-block worker pool. Accumulates up to CMP_BC7ENC_BATCH_N
-    // blocks in a row-bounded batch buffer, flushes on full-batch or at
-    // end-of-row through CompressBlockBC7_bc7enc_batch_from_double which
-    // does the 3a partition and one or two bc7e_compress_blocks calls.
-    // Quality/mask/restrict are hoisted into a per-Compress() context;
-    // BC7BlockEncoder members would give identical values by construction,
-    // so we read from the CCodec_BC7 members directly.
+    // ---- Batched producer path (Phase 3 part 5, Step 3 rework) ----------
+    // Producer-side batching that PRESERVES the per-block worker pool.
+    // Each worker's BC7EncodeThreadParam carries its own batch_in buffer
+    // and its own bctx (both allocated in InitializeBC7Library). Producer
+    // is single-threaded — it accumulates blocks directly into the
+    // selected worker's batch_in (no producer-side memcpy), then hands
+    // the whole batch to that worker via DispatchBatch and picks the
+    // next idle worker for the next batch. Workers run
+    // CompressBlockBC7_bc7enc_batch_from_double concurrently across N
+    // threads via the existing thread-proc dispatch, restoring
+    // thread-parallelism that the previous inline-flush version lost.
     {
-        // BC7BlockEncoder ctor rescues validModeMask==0 to 0xCF
-        // (bc7_encode.h:50-53); the per-block hook reads that rescued
-        // value. Match that here so the two paths stay byte-identical on
-        // pathological inputs.
-        const CMP_DWORD safeModeMask = (m_ModeMask == 0) ? 0xCF : m_ModeMask;
-        CMP_bc7enc_Options opts;
-        opts.quality        = m_Quality;
-        opts.validModeMask  = static_cast<unsigned char>(safeModeMask & 0xFF);
-        opts.colourRestrict = m_ColourRestrict ? 1 : 0;
-        opts.alphaRestrict  = m_AlphaRestrict  ? 1 : 0;
-        opts.perceptual     = 0;
-
-        CMP_bc7enc_BatchContext* bctx = CompressBlockBC7_bc7enc_batch_create(&opts);
-
-        double   batch_in[CMP_BC7ENC_BATCH_N][16][4];
-        unsigned int batch_count = 0;
-        CMP_DWORD    batch_out_offset = 0;  // byte offset into pOutBuffer for the first block in the batch
+        double* batch_in;                     // pointer into current worker's buffer
+        unsigned int cur_count       = 0;
+        int          cur_slot        = -1;
+        CMP_DWORD    batch_out_offset = 0;    // byte offset into pOutBuffer for first block in current batch
 
         CMP_DWORD block = 0;
         for (CMP_DWORD j = 0; j < dwBlocksY; j++)
@@ -589,10 +670,14 @@ CodecError CCodec_BC7::Compress(CCodecBuffer& bufferIn, CCodecBuffer& bufferOut,
                 std::memset(srcBlock, 0, sizeof(srcBlock));
                 bufferIn.ReadBlockRGBA(i * 4, j * 4, 4, 4, srcBlock);
 
-                if (batch_count == 0)
+                if (cur_count == 0)
+                {
+                    cur_slot         = AcquireIdleWorker();
                     batch_out_offset = block;
+                    batch_in         = reinterpret_cast<double*>(m_EncodeParameterStorage[cur_slot].batch_in);
+                }
 
-                double (*dst)[4] = batch_in[batch_count];
+                double (*dst)[4] = reinterpret_cast<double (*)[4]>(batch_in + cur_count * 16 * 4);
                 int si = 0;
                 for (int r = 0; r < BLOCK_SIZE_4; r++)
                 {
@@ -605,18 +690,15 @@ CodecError CCodec_BC7::Compress(CCodecBuffer& bufferIn, CCodecBuffer& bufferOut,
                         si += 4;
                     }
                 }
-                batch_count++;
+                cur_count++;
                 block += 16;
 
                 const bool endOfRow = (i + 1 == dwBlocksX);
-                if (batch_count == CMP_BC7ENC_BATCH_N || endOfRow)
+                if (cur_count == CMP_BC7ENC_BATCH_N || endOfRow)
                 {
-                    CompressBlockBC7_bc7enc_batch_from_double(
-                        bctx,
-                        reinterpret_cast<const double*>(batch_in),
-                        pOutBuffer + batch_out_offset,
-                        batch_count);
-                    batch_count = 0;
+                    DispatchBatch(cur_slot, cur_count, pOutBuffer + batch_out_offset);
+                    cur_count = 0;
+                    cur_slot  = -1;
                 }
             }
 
@@ -631,7 +713,7 @@ CodecError CCodec_BC7::Compress(CCodecBuffer& bufferIn, CCodecBuffer& bufferOut,
                         old_progress = progress;
                         if (pFeedbackProc(progress * 100.0f, pUser1, pUser2))
                         {
-                            CompressBlockBC7_bc7enc_batch_destroy(bctx);
+                            FinishBC7Encoding();
                             return CE_Aborted;
                         }
                     }
@@ -639,7 +721,9 @@ CodecError CCodec_BC7::Compress(CCodecBuffer& bufferIn, CCodecBuffer& bufferOut,
             }
         }
 
-        CompressBlockBC7_bc7enc_batch_destroy(bctx);
+        // Drain all worker slots before returning — outputs must be
+        // finalized before the buffer is handed back to the caller.
+        FinishBC7Encoding();
 
 #ifdef USE_FILEIO
         if (bc7_File) { fclose(bc7_File); bc7_File = NULL; }

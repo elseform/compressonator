@@ -37,6 +37,10 @@
 #include "codec_dxtc.h"
 #include "compressonator.h"
 
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+#include "bc7enc_rdo_adapter.h"
+#endif
+
 // #define USE_THREADED_CALLBACKS  // This is experimental code to improve compression performance!
 #ifdef USE_THREADED_CALLBACKS
 typedef struct
@@ -53,6 +57,17 @@ struct BC7EncodeThreadParam
     CMP_BYTE*         out;
     volatile CMP_BOOL run;
     volatile CMP_BOOL exit;
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+    // Batched-mode fields. When batch_count > 0, worker dispatches to
+    // bc7e batch entry point using batch_in/batch_count/bctx and writes
+    // batch_count*16 bytes at out. When batch_count == 0, worker takes
+    // the per-block path (encoder->CompressBlock(in, out)) — preserving
+    // per-block hook fallback if the batched producer ever hands a
+    // per-block payload.
+    double                    batch_in[CMP_BC7ENC_BATCH_N][16][4];
+    unsigned int              batch_count;
+    CMP_bc7enc_BatchContext*  bctx;
+#endif
 };
 
 class CCodec_BC7 : public CCodec_DXTC
@@ -111,9 +126,25 @@ private:
     BC7BlockEncoder* m_encoder[MAX_BC7_THREADS];
     BC7BlockDecoder* m_decoder;
 
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+    // Per-worker bc7e batch contexts, built at InitializeBC7Library from
+    // the (already-set) codec options. One per worker so workers run
+    // batch flushes concurrently without shared state.
+    CMP_bc7enc_BatchContext* m_bctx[MAX_BC7_THREADS];
+#endif
+
     // Encoder interfaces
     CodecError InitializeBC7Library();
     CodecError EncodeBC7Block(double in[BC7_BLOCK_PIXELS][MAX_DIMENSION_BIG], CMP_BYTE* out);
+#if defined(CMP_USE_BC7ENC_RDO_BATCH)
+    // Reserves an idle worker slot, returns its index. Blocks until one
+    // frees. Used by the batched producer to fill batch_in directly into
+    // the worker's storage (no producer-side memcpy).
+    int  AcquireIdleWorker();
+    // Kicks the reserved worker with a batch of `count` blocks whose
+    // pixel data is already in m_EncodeParameterStorage[slot].batch_in.
+    void DispatchBatch(int slot, unsigned int count, CMP_BYTE* out);
+#endif
     CodecError FinishBC7Encoding(void);
 
     static void Run();
