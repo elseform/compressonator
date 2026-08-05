@@ -303,7 +303,7 @@ bool CCodec_ASTC::SetParameter(const CMP_CHAR* pszParamName, CMP_CHAR* sValue)
     }
     if (strcmp(pszParamName, "Quality") == 0)
     {
-        m_Quality = std::stof(sValue);
+        m_Quality = std::stod(sValue);
         if ((m_Quality < 0) || (m_Quality > 1.0))
         {
             return false;

@@ -408,7 +408,7 @@ static bool ProcessCMDLineOptions(const char* strCommand, const char* strParamet
             {
                 throw "No Quality value specified";
             }
-            float value = std::stof(strParameter);
+            double value = std::stod(strParameter);
             if ((value < 0) || (value > 1.0))
             {
                 throw "Quality value should be in range of 0 to 1.0";
