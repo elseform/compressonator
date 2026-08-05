@@ -48,6 +48,39 @@ void CompressBlockBC7_bc7enc_from_double_opts(const double in[16][4],
                                               unsigned char cmpBlock[16],
                                               const CMP_bc7enc_Options* opts);
 
+// ---- Batched entry points (Phase 3 part 5) -------------------------------
+//
+// bc7e_compress_blocks amortizes per-call setup and packs SIMD lanes over
+// multiple blocks; calling it one-block-at-a-time (as the per-block entry
+// points above do) leaves that on the table. The batch API takes a
+// prebuilt context — quality/mask/restrict are constant across an entire
+// CCodec_BC7::Compress() call (verified against BC7BlockEncoder member
+// lifetime), so the params-pair only needs to be built once per call,
+// not once per block.
+//
+// Restrict handling per NOTES.md option 3a: the batch call scans each
+// block's alpha, partitions into default + restricted sub-batches, and
+// issues 1 or 2 bc7e_compress_blocks calls per flush before scattering
+// outputs back into original positions.
+//
+// Recommended batch size: CMP_BC7ENC_BATCH_N (see below). Callers may
+// pass smaller counts (tail of a row); larger counts are rejected.
+
+#define CMP_BC7ENC_BATCH_N 64
+
+typedef struct CMP_bc7enc_BatchContext CMP_bc7enc_BatchContext;
+
+CMP_bc7enc_BatchContext* CompressBlockBC7_bc7enc_batch_create(const CMP_bc7enc_Options* opts);
+void                     CompressBlockBC7_bc7enc_batch_destroy(CMP_bc7enc_BatchContext* ctx);
+
+// inputs: pointer to `count` contiguous blocks of double[16][4] each.
+// outputs: `count * 16` contiguous bytes.
+// count: 1 .. CMP_BC7ENC_BATCH_N. Values outside this range are asserted.
+void CompressBlockBC7_bc7enc_batch_from_double(CMP_bc7enc_BatchContext* ctx,
+                                               const double* inputs,
+                                               unsigned char* outputs,
+                                               unsigned int count);
+
 #ifdef __cplusplus
 }
 #endif

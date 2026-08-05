@@ -32,6 +32,10 @@
 #include "bc7_library.h"
 #include <chrono>
 
+#if defined(CMP_USE_BC7ENC_RDO) && defined(CMP_USE_BC7ENC_RDO_BATCH)
+#include "bc7enc_rdo_adapter.h"
+#endif
+
 #ifdef BC7_COMPDEBUGGER
 #include "compclient.h"
 #endif
@@ -546,6 +550,102 @@ CodecError CCodec_BC7::Compress(CCodecBuffer& bufferIn, CCodecBuffer& bufferOut,
     bc7_File       = fopen("bc7_report.txt", "w");
     bc7_blockcount = 0;
     bc7_total_MSE  = 0;
+#endif
+
+#if defined(CMP_USE_BC7ENC_RDO) && defined(CMP_USE_BC7ENC_RDO_BATCH)
+    // ---- Batched producer path (Phase 3 part 5) --------------------------
+    // Bypasses the per-block worker pool. Accumulates up to CMP_BC7ENC_BATCH_N
+    // blocks in a row-bounded batch buffer, flushes on full-batch or at
+    // end-of-row through CompressBlockBC7_bc7enc_batch_from_double which
+    // does the 3a partition and one or two bc7e_compress_blocks calls.
+    // Quality/mask/restrict are hoisted into a per-Compress() context;
+    // BC7BlockEncoder members would give identical values by construction,
+    // so we read from the CCodec_BC7 members directly.
+    {
+        // BC7BlockEncoder ctor rescues validModeMask==0 to 0xCF
+        // (bc7_encode.h:50-53); the per-block hook reads that rescued
+        // value. Match that here so the two paths stay byte-identical on
+        // pathological inputs.
+        const CMP_DWORD safeModeMask = (m_ModeMask == 0) ? 0xCF : m_ModeMask;
+        CMP_bc7enc_Options opts;
+        opts.quality        = m_Quality;
+        opts.validModeMask  = static_cast<unsigned char>(safeModeMask & 0xFF);
+        opts.colourRestrict = m_ColourRestrict ? 1 : 0;
+        opts.alphaRestrict  = m_AlphaRestrict  ? 1 : 0;
+        opts.perceptual     = 0;
+
+        CMP_bc7enc_BatchContext* bctx = CompressBlockBC7_bc7enc_batch_create(&opts);
+
+        double   batch_in[CMP_BC7ENC_BATCH_N][16][4];
+        unsigned int batch_count = 0;
+        CMP_DWORD    batch_out_offset = 0;  // byte offset into pOutBuffer for the first block in the batch
+
+        CMP_DWORD block = 0;
+        for (CMP_DWORD j = 0; j < dwBlocksY; j++)
+        {
+            for (CMP_DWORD i = 0; i < dwBlocksX; i++)
+            {
+                CMP_BYTE srcBlock[BLOCK_SIZE_4X4X4];
+                std::memset(srcBlock, 0, sizeof(srcBlock));
+                bufferIn.ReadBlockRGBA(i * 4, j * 4, 4, 4, srcBlock);
+
+                if (batch_count == 0)
+                    batch_out_offset = block;
+
+                double (*dst)[4] = batch_in[batch_count];
+                int si = 0;
+                for (int r = 0; r < BLOCK_SIZE_4; r++)
+                {
+                    for (int c = 0; c < BLOCK_SIZE_4; c++)
+                    {
+                        dst[r * BLOCK_SIZE_4 + c][BC_COMP_RED]   = (double)srcBlock[si];
+                        dst[r * BLOCK_SIZE_4 + c][BC_COMP_GREEN] = (double)srcBlock[si + 1];
+                        dst[r * BLOCK_SIZE_4 + c][BC_COMP_BLUE]  = (double)srcBlock[si + 2];
+                        dst[r * BLOCK_SIZE_4 + c][BC_COMP_ALPHA] = (double)srcBlock[si + 3];
+                        si += 4;
+                    }
+                }
+                batch_count++;
+                block += 16;
+
+                const bool endOfRow = (i + 1 == dwBlocksX);
+                if (batch_count == CMP_BC7ENC_BATCH_N || endOfRow)
+                {
+                    CompressBlockBC7_bc7enc_batch_from_double(
+                        bctx,
+                        reinterpret_cast<const double*>(batch_in),
+                        pOutBuffer + batch_out_offset,
+                        batch_count);
+                    batch_count = 0;
+                }
+            }
+
+            // Row-boundary progress / abort check — matches stock semantics.
+            if (pFeedbackProc)
+            {
+                if ((j % lineAtPercent) == 0)
+                {
+                    float progress = (j * dwBlocksX) / fBlocksXY;
+                    if (progress != old_progress)
+                    {
+                        old_progress = progress;
+                        if (pFeedbackProc(progress * 100.0f, pUser1, pUser2))
+                        {
+                            CompressBlockBC7_bc7enc_batch_destroy(bctx);
+                            return CE_Aborted;
+                        }
+                    }
+                }
+            }
+        }
+
+        CompressBlockBC7_bc7enc_batch_destroy(bctx);
+
+#ifdef USE_FILEIO
+        if (bc7_File) { fclose(bc7_File); bc7_File = NULL; }
+#endif
+        return CE_OK;
+    }
 #endif
 
     CMP_DWORD block = 0;

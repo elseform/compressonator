@@ -247,3 +247,173 @@ extern "C" void CompressBlockBC7_bc7enc_from_double_opts(const double in[16][4],
                                   opts->alphaRestrict  != 0);
     encode_one(pixels, cmpBlock, p);
 }
+
+// ---- Batched entry points -------------------------------------------------
+//
+// The batch context caches both preset variants once per Compress() call
+// (verified constant in Phase 3 part 5 investigation). Per-block work is
+// reduced to: (a) double→uint32 pixel pack, (b) alpha scan when restricts
+// are enabled, (c) partition into default/restricted sub-batches, and
+// (d) one or two bc7e_compress_blocks calls per flush.
+
+struct CMP_bc7enc_BatchContext
+{
+    ispc::bc7e_compress_block_params m_default;
+    ispc::bc7e_compress_block_params m_restricted;
+    bool                             m_has_restricted;
+    bool                             m_colour_restrict;
+    bool                             m_alpha_restrict;
+    // Fallback guards — mirror params_pair. If the restricted variant
+    // would leave a block class unencodable, block_needs_restricted()
+    // returns false for that class so the block routes to m_default.
+    bool                             m_restricted_alpha_ok;
+    bool                             m_restricted_opaque_ok;
+};
+
+extern "C" CMP_bc7enc_BatchContext*
+CompressBlockBC7_bc7enc_batch_create(const CMP_bc7enc_Options* opts)
+{
+    ensure_lib_init();
+
+    auto* ctx = new CMP_bc7enc_BatchContext();
+
+    const bool perceptual = (opts->perceptual != 0);
+    select_preset(opts->quality, perceptual, &ctx->m_default);
+    apply_mode_mask(opts->validModeMask, &ctx->m_default);
+
+    ctx->m_colour_restrict = (opts->colourRestrict != 0);
+    ctx->m_alpha_restrict  = (opts->alphaRestrict  != 0);
+    ctx->m_has_restricted  = ctx->m_colour_restrict || ctx->m_alpha_restrict;
+
+    if (ctx->m_has_restricted)
+    {
+        std::memcpy(&ctx->m_restricted, &ctx->m_default, sizeof(ctx->m_default));
+        restrict_modes_67(&ctx->m_restricted, ctx->m_colour_restrict, ctx->m_alpha_restrict);
+        ctx->m_restricted_alpha_ok  = has_any_alpha_mode(&ctx->m_restricted);
+        ctx->m_restricted_opaque_ok = has_any_opaque_mode(&ctx->m_restricted);
+    }
+    else
+    {
+        ctx->m_restricted_alpha_ok  = true;
+        ctx->m_restricted_opaque_ok = true;
+    }
+
+    return ctx;
+}
+
+extern "C" void CompressBlockBC7_bc7enc_batch_destroy(CMP_bc7enc_BatchContext* ctx)
+{
+    delete ctx;
+}
+
+namespace
+{
+
+// Alpha scan matching notValidBlockForMode() at bc7_encode.cpp:2633-2661
+// and the per-block choose_params() above. Returns true if the block
+// should use the restricted params variant. The `..._ok` flags are the
+// fallback guards from CMP_bc7enc_BatchContext — when the restricted
+// variant would leave a block class unencodable, we refuse to restrict
+// that block (route it to m_default instead).
+bool block_needs_restricted(const uint32_t pixels[16],
+                            bool colour_restrict, bool alpha_restrict,
+                            bool restricted_opaque_ok, bool restricted_alpha_ok)
+{
+    bool blockNeedsAlpha   = false;
+    bool blockAlphaZeroOne = false;
+    for (int i = 0; i < 16; ++i)
+    {
+        const uint8_t a = static_cast<uint8_t>(pixels[i] >> 24);
+        if (a != 255)             blockNeedsAlpha   = true;
+        if (a == 0 || a == 255)   blockAlphaZeroOne = true;
+    }
+    if (colour_restrict && !blockNeedsAlpha && restricted_opaque_ok)
+        return true;
+    if (alpha_restrict  &&  blockNeedsAlpha && blockAlphaZeroOne && restricted_alpha_ok)
+        return true;
+    return false;
+}
+
+} // namespace
+
+extern "C" void CompressBlockBC7_bc7enc_batch_from_double(CMP_bc7enc_BatchContext* ctx,
+                                                          const double* inputs,
+                                                          unsigned char* outputs,
+                                                          unsigned int count)
+{
+    if (count == 0) return;
+    if (count > CMP_BC7ENC_BATCH_N) return;  // Caller contract violation; drop.
+
+    // Pack all inputs to uint32 RGBA once. 64 blocks * 16 pixels * 4 bytes = 4KB.
+    uint32_t all_pixels[CMP_BC7ENC_BATCH_N * 16];
+    for (unsigned int b = 0; b < count; ++b)
+    {
+        const double* blk = inputs + b * 16 * 4;
+        uint32_t* dst = all_pixels + b * 16;
+        for (int i = 0; i < 16; ++i)
+        {
+            const uint32_t r = clamp_u8(blk[i * 4 + 0]);
+            const uint32_t g = clamp_u8(blk[i * 4 + 1]);
+            const uint32_t b_ = clamp_u8(blk[i * 4 + 2]);
+            const uint32_t a = clamp_u8(blk[i * 4 + 3]);
+            dst[i] = r | (g << 8) | (b_ << 16) | (a << 24);
+        }
+    }
+
+    // Fast path: no restrict variant in play — single bc7e call, direct output.
+    if (!ctx->m_has_restricted)
+    {
+        uint64_t out_blocks[CMP_BC7ENC_BATCH_N * 2];
+        ispc::bc7e_compress_blocks(count,
+                                   out_blocks,
+                                   all_pixels,
+                                   &ctx->m_default);
+        std::memcpy(outputs, out_blocks, count * 16);
+        return;
+    }
+
+    // Option 3a partition: classify each block, gather into two contiguous
+    // sub-batches, one bc7e call per non-empty sub-batch, scatter results back.
+    uint32_t def_pixels[CMP_BC7ENC_BATCH_N * 16];
+    uint32_t res_pixels[CMP_BC7ENC_BATCH_N * 16];
+    uint8_t  def_indices[CMP_BC7ENC_BATCH_N];
+    uint8_t  res_indices[CMP_BC7ENC_BATCH_N];
+    unsigned int def_count = 0;
+    unsigned int res_count = 0;
+
+    for (unsigned int b = 0; b < count; ++b)
+    {
+        const uint32_t* src = all_pixels + b * 16;
+        if (block_needs_restricted(src, ctx->m_colour_restrict, ctx->m_alpha_restrict,
+                                    ctx->m_restricted_opaque_ok, ctx->m_restricted_alpha_ok))
+        {
+            std::memcpy(res_pixels + res_count * 16, src, 16 * sizeof(uint32_t));
+            res_indices[res_count++] = static_cast<uint8_t>(b);
+        }
+        else
+        {
+            std::memcpy(def_pixels + def_count * 16, src, 16 * sizeof(uint32_t));
+            def_indices[def_count++] = static_cast<uint8_t>(b);
+        }
+    }
+
+    uint64_t def_out[CMP_BC7ENC_BATCH_N * 2];
+    uint64_t res_out[CMP_BC7ENC_BATCH_N * 2];
+
+    if (def_count > 0)
+    {
+        ispc::bc7e_compress_blocks(def_count, def_out, def_pixels, &ctx->m_default);
+        for (unsigned int i = 0; i < def_count; ++i)
+        {
+            std::memcpy(outputs + def_indices[i] * 16, def_out + i * 2, 16);
+        }
+    }
+    if (res_count > 0)
+    {
+        ispc::bc7e_compress_blocks(res_count, res_out, res_pixels, &ctx->m_restricted);
+        for (unsigned int i = 0; i < res_count; ++i)
+        {
+            std::memcpy(outputs + res_indices[i] * 16, res_out + i * 2, 16);
+        }
+    }
+}

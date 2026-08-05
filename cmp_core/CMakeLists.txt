@@ -165,4 +165,14 @@ if (OPTION_CMP_USE_BC7ENC_RDO)
     )
     target_include_directories(CMP_Core PRIVATE "${BC7E_OBJ_DIR}")
     target_compile_definitions(CMP_Core PUBLIC CMP_USE_BC7ENC_RDO=1)
+
+    # Optional producer-side batching (Phase 3 part 5). Groups blocks into
+    # BATCH_N=64 chunks before calling into bc7e_compress_blocks, amortizing
+    # per-call setup and packing SIMD lanes. Requires OPTION_CMP_USE_BC7ENC_RDO
+    # to be on. Kept as a separate toggle so the per-block bc7e path remains
+    # reachable for correctness A/B verification.
+    option(OPTION_CMP_USE_BC7ENC_RDO_BATCH "Producer-side block batching for bc7e (requires OPTION_CMP_USE_BC7ENC_RDO)" OFF)
+    if (OPTION_CMP_USE_BC7ENC_RDO_BATCH)
+        target_compile_definitions(CMP_Core PUBLIC CMP_USE_BC7ENC_RDO_BATCH=1)
+    endif()
 endif()
