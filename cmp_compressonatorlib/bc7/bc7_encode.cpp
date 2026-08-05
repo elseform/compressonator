@@ -1282,8 +1282,15 @@ double BC7BlockEncoder::CompressBlock(double in[MAX_SUBSET_SIZE][MAX_DIMENSION_B
     // Additive hook: route the CPU block encode through richgel999's
     // bc7e.ispc SIMD encoder. Stock BC7BlockEncoder below stays intact
     // for A/B comparison — flipping the CMP_USE_BC7ENC_RDO CMake option
-    // is what selects between them at build time.
-    CompressBlockBC7_bc7enc_from_double(reinterpret_cast<const double(*)[4]>(in), out);
+    // is what selects between them at build time. Options are threaded
+    // through the Phase 3 part 2 mapping in bc7enc_rdo_adapter.cpp.
+    CMP_bc7enc_Options opts;
+    opts.quality        = m_quality;
+    opts.validModeMask  = static_cast<unsigned char>(m_validModeMask & 0xFF);
+    opts.colourRestrict = m_colourRestrict ? 1 : 0;
+    opts.alphaRestrict  = m_alphaRestrict  ? 1 : 0;
+    opts.perceptual     = 0;
+    CompressBlockBC7_bc7enc_from_double_opts(reinterpret_cast<const double(*)[4]>(in), out, &opts);
     return 0.0;
 #endif
     CMP_DWORD i, j;
