@@ -40,15 +40,19 @@ endif()
 if (CMP_HOST_WINDOWS)
     #copy glew32.dll
     #get_property(ExtGLEW_BIN_PATH GLOBAL PROPERTY ExtGLEW_BIN_PATH)
-    cmp_gui_copy_to_output(${ExtGLEW_BIN_PATH}/glew32.dll ${ASSETS_PATH}/glew32.dll)
-    
-    # Old OpenCV dll provided by fetch_dependencies
-    cmp_gui_copy_to_output(${PROJECT_SOURCE_DIR}/../common/lib/ext/opencv/2.49/x64/VS2015/bin/$<$<CONFIG:Debug>:debug>$<$<CONFIG:Release>:release>/opencv_core249$<$<CONFIG:Debug>:d>.dll ${ASSETS_PATH}/opencv_core249$<$<CONFIG:Debug>:d>.dll)
-    cmp_gui_copy_to_output(${PROJECT_SOURCE_DIR}/../common/lib/ext/opencv/2.49/x64/VS2015/bin/$<$<CONFIG:Debug>:debug>$<$<CONFIG:Release>:release>/opencv_imgproc249$<$<CONFIG:Debug>:d>.dll ${ASSETS_PATH}/opencv_imgproc249$<$<CONFIG:Debug>:d>.dll)
+    if (OPTION_CMP_OPENGL)
+        cmp_gui_copy_to_output(${ExtGLEW_BIN_PATH}/glew32.dll ${ASSETS_PATH}/glew32.dll)
+    endif()
 
-    # New OpenCV Support
-    if(DEFINED ${OPENCV_DIR})
-        cmp_gui_copy_to_output(${OPENCV_DIR}build/x64/vc15/bin/opencv_world420$<$<CONFIG:Debug>:d>.dll ${ASSETS_PATH}/opencv_world420$<$<CONFIG:Debug>:d>.dll)
+    if (OPTION_CMP_OPENCV)
+        # Old OpenCV dll provided by fetch_dependencies
+        cmp_gui_copy_to_output(${PROJECT_SOURCE_DIR}/../common/lib/ext/opencv/2.49/x64/VS2015/bin/$<$<CONFIG:Debug>:debug>$<$<CONFIG:Release>:release>/opencv_core249$<$<CONFIG:Debug>:d>.dll ${ASSETS_PATH}/opencv_core249$<$<CONFIG:Debug>:d>.dll)
+        cmp_gui_copy_to_output(${PROJECT_SOURCE_DIR}/../common/lib/ext/opencv/2.49/x64/VS2015/bin/$<$<CONFIG:Debug>:debug>$<$<CONFIG:Release>:release>/opencv_imgproc249$<$<CONFIG:Debug>:d>.dll ${ASSETS_PATH}/opencv_imgproc249$<$<CONFIG:Debug>:d>.dll)
+
+        # New OpenCV Support
+        if(DEFINED ${OPENCV_DIR})
+            cmp_gui_copy_to_output(${OPENCV_DIR}build/x64/vc15/bin/opencv_world420$<$<CONFIG:Debug>:d>.dll ${ASSETS_PATH}/opencv_world420$<$<CONFIG:Debug>:d>.dll)
+        endif()
     endif()
 
     #KTX2 Features dll

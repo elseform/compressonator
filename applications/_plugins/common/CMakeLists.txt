@@ -15,6 +15,10 @@ else()
 endif()
 
 
+if (OPTION_CMP_OPENCV)
+    list(APPEND PLUGIN_COMMON_SRC ssim.cpp)
+endif()
+
 list(APPEND PLUGIN_COMMON_SRC
     atiformats.cpp
     cmdline.cpp
@@ -23,7 +27,6 @@ list(APPEND PLUGIN_COMMON_SRC
     modeldata.cpp
     pluginmanager.cpp
     cpu_timing.cpp
-    ssim.cpp
     tc_plugininternal.cpp
     textureio.cpp
     userinterface.cpp

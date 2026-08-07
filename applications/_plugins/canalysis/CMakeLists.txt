@@ -14,6 +14,15 @@ else()
 endif()
 
 
+if (OPTION_CMP_OPENCV)
+    set(ANALYSIS_SSIM_FILES
+               ${PROJECT_SOURCE_DIR}/applications/_plugins/common/ssim.h
+               ${PROJECT_SOURCE_DIR}/applications/_plugins/common/ssim.cpp
+    )
+else()
+    set(ANALYSIS_SSIM_FILES)
+endif()
+
 target_sources(Image_Analysis
                PRIVATE
                analysis/canalysis.cpp
@@ -23,8 +32,7 @@ target_sources(Image_Analysis
                ${PROJECT_SOURCE_DIR}/applications/_plugins/common/pluginmanager.cpp
                ${PROJECT_SOURCE_DIR}/applications/_plugins/common/textureio.h
                ${PROJECT_SOURCE_DIR}/applications/_plugins/common/textureio.cpp
-               ${PROJECT_SOURCE_DIR}/applications/_plugins/common/ssim.h
-               ${PROJECT_SOURCE_DIR}/applications/_plugins/common/ssim.cpp
+               ${ANALYSIS_SSIM_FILES}
                ${ANALYSIS_QT_FILES}
                )
 

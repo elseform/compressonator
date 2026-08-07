@@ -33,7 +33,9 @@
 
 #include "plugininterface.h"
 #include "pluginmanager.h"
+#if (OPTION_CMP_OPENCV == 1)
 #include "ssim.h"
+#endif
 #include "textureio.h"
 
 #include "cpimageloader.h"
@@ -748,6 +750,7 @@ void Plugin_Canalysis::setActiveChannels()
     }
 }
 
+#if (OPTION_CMP_OPENCV == 1)
 void Plugin_Canalysis::processSSIMResults()
 {
     switch (m_RGBAChannels)
@@ -769,6 +772,7 @@ void Plugin_Canalysis::processSSIMResults()
         break;
     }
 }
+#endif
 
 int Plugin_Canalysis::TC_ImageDiff(const char*       in1,
                                    const char*       in2,

@@ -96,7 +96,7 @@ target_sources(CMP_Core_AVX512 PRIVATE source/core_simd_avx512.cpp)
 target_include_directories(CMP_Core_AVX512 PRIVATE source shaders)
 
 if (WIN32)
-    target_compile_options(CMP_Core_AVX512 PRIVATE /arch:AVX-512)
+    target_compile_options(CMP_Core_AVX512 PRIVATE /arch:AVX512)
 else()
     target_compile_options(CMP_Core_AVX512 PRIVATE -march=skylake-avx512)
 endif()
