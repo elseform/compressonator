@@ -7,7 +7,11 @@ endif()
 get_filename_component(DEPENDENCIES_INSTALL_DIR ${DEPENDENCIES_INSTALL_DIR}/${CMAKE_SYSTEM_NAME} ABSOLUTE)
 
 if (WIN32)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>$<$<BOOL:BUILD_SHARED_LIBS>:DLL>")
+    # $<BOOL:BUILD_SHARED_LIBS> tests the literal string "BUILD_SHARED_LIBS",
+    # which is always truthy, so this always selected the DLL runtime (/MD)
+    # regardless of BUILD_SHARED_LIBS. Dereference it, matching the if()
+    # two lines below which gets this right.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>$<$<BOOL:${BUILD_SHARED_LIBS}>:DLL>")
     if (BUILD_SHARED_LIBS)
         get_filename_component(DEPENDENCIES_INSTALL_DIR ${DEPENDENCIES_INSTALL_DIR}/MD ABSOLUTE)
     else()
