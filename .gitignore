@@ -29,6 +29,7 @@ build/Debug*
 build/Release*
 build_cli/
 build_cli_off/
+build_cli_batch/
 build_extras/
 
 */shaders/compiled/*
