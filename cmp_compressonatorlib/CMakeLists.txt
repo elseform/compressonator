@@ -24,11 +24,6 @@ file(GLOB_RECURSE CMP_SRCS
     "dxtc/*.h"
     "dxtc/*.cpp"
     "dxtc/*.c"
-    "etc/*.h"
-    "etc/*.cpp"
-    "etc/etcpack/*.h"
-    "etc/etcpack/*.cpp"
-    "etc/etcpack/*.cxx"
     "gt/*.h"
     "gt/*.cpp"
 
@@ -57,6 +52,17 @@ if (OPTION_BUILD_ASTC)
         "astc/arm/*.cpp"
         )
     list(APPEND CMP_SRCS ${CMP_ASTC_SRCS})
+endif()
+
+if (OPTION_CMP_ETC)
+    file(GLOB_RECURSE CMP_ETC_SRCS
+        "etc/*.h"
+        "etc/*.cpp"
+        "etc/etcpack/*.h"
+        "etc/etcpack/*.cpp"
+        "etc/etcpack/*.cxx"
+        )
+    list(APPEND CMP_SRCS ${CMP_ETC_SRCS})
 endif()
 
 if (OPTION_BUILD_BROTLIG)
@@ -91,8 +97,6 @@ target_include_directories(CMP_Compressonator
     buffer
     dxt
     dxtc
-    etc
-    etc/etcpack/
     gt
 
     # Common
@@ -111,6 +115,15 @@ if (OPTION_BUILD_ASTC)
         astc
         astc/arm/
     )
+endif()
+
+if (OPTION_CMP_ETC)
+    target_include_directories(CMP_Compressonator
+        PUBLIC
+        etc
+        etc/etcpack/
+    )
+    target_compile_definitions(CMP_Compressonator PUBLIC OPTION_CMP_ETC=1)
 endif()
 
 if (OPTION_BUILD_BROTLIG)

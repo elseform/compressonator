@@ -46,10 +46,12 @@
 #include "codec_atc_rgb.h"
 #include "codec_atc_rgba_explicit.h"
 #include "codec_atc_rgba_interpolated.h"
+#if (OPTION_CMP_ETC == 1)
 #include "codec_etc_rgb.h"
 #include "codec_etc2_rgb.h"
 #include "codec_etc2_rgba.h"
 #include "codec_etc2_rgba1.h"
+#endif
 #include "codec_bc6h.h"
 #include "codec_bc7.h"
 
@@ -219,6 +221,7 @@ CCodec* CreateCodec(CodecType nCodecType)
         return new CCodec_ATC_RGBA_Explicit;
     case CT_ATC_RGBA_Interpolated:
         return new CCodec_ATC_RGBA_Interpolated;
+#if (OPTION_CMP_ETC == 1)
     case CT_ETC_RGB:
         return new CCodec_ETC_RGB;
     case CT_ETC2_RGB:
@@ -230,6 +233,7 @@ CCodec* CreateCodec(CodecType nCodecType)
     case CT_ETC2_RGBA1:
     case CT_ETC2_SRGBA1:
         return new CCodec_ETC2_RGBA1(nCodecType);
+#endif
     case CT_BC6H:
     case CT_BC6H_SF:
         return new CCodec_BC6H(nCodecType);

@@ -168,6 +168,7 @@ cmp_option(OPTION_CMP_OPENGL         "Use OpenGL"                    ON     OPTI
 cmp_option(OPTION_CMP_QT             "Use Qt for Image Loading"      ON     OPTION_ENABLE_ALL_APPS OR OPTION_BUILD_APPS_CMP_GUI)
 cmp_option(OPTION_CMP_OPENCV         "Use OpenCV"                    ON     OPTION_BUILD_APPS_CMP_CLI OR OPTION_BUILD_APPS_CMP_GUI)
 cmp_option(OPTION_CMP_GTC            "Use GTC Codec"                 OFF    TRUE) # Internal R&D
+cmp_option(OPTION_CMP_ETC            "Build ETC/ETC2 Codec (Ericsson SLA)" ON TRUE) # OFF strips etcpack from CLI (license reasons)
 cmp_option(OPTION_BUILD_BROTLIG      "Use Brotli-G Codec for CLI"    ON     CMP_HOST_WINDOWS)
 cmp_option(OPTION_BUILD_BROTLIG_GUI  "Use Brotli-G Codec for GUI"    OFF    TRUE) # In development for v4.4
 # Internal testing application

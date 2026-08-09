@@ -249,10 +249,12 @@ void PrintUsage()
     printf("DXT5_xGxR      Two-component swizzled DXT5 format with the red component\n");
     printf("               swizzled into the alpha channel & the green component in the\n");
     printf("               green channel. Eight bits per pixel\n");
+#if (OPTION_CMP_ETC == 1)
     printf("ETC_RGB        Ericsson Texture Compression - Compressed RGB format.\n");
     printf("ETC2_RGB       Ericsson Texture Compression - Compressed RGB format.\n");
     printf("ETC2_RGBA      Ericsson Texture Compression - Compressed RGB with 8 bit Alpha.\n");
     printf("ETC2_RGBA1     Ericsson Texture Compression - Compressed RGB with 1 bit Alpha.\n");
+#endif
 #ifdef USE_GTC
     printf("GTC            Compressed RGB 8:8:8 format \n");
     printf("               This is a preview version for evaluation: subject to changes\n");
