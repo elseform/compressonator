@@ -7,7 +7,7 @@ that replaces the CPU-side BC7 codec with the `bc7e.ispc` encoder from
 > This README section describes the fork. **Everything below the horizontal
 > rule is AMD's original README, unmodified.** The full investigation —
 > every measurement, dead end, and correction — lives in
-> [`NOTES.md`](../NOTES.md) in the parent repository.
+> [`NOTES.md`](https://github.com/noisethanks/compressonator/blob/bc7enc-rdo-integration/NOTES.md).
 
 ---
 
@@ -197,7 +197,7 @@ values reproduced digit-for-digit**. The single exception is in the
 aren't comparable across those machines; the qualitative result is.
 
 Full tables, methodology and the investigation behind them:
-*Phase 3 part 6* and *Phase 4 part 4* in [`NOTES.md`](../NOTES.md).
+*Phase 3 part 6* and *Phase 4 part 4* in [`NOTES.md`](https://github.com/noisethanks/compressonator/blob/bc7enc-rdo-integration/NOTES.md).
 
 ## 6. License and attribution
 
@@ -229,19 +229,6 @@ fork's changes. They affect upstream regardless of this work.
 | 1 | **Zero-valid-modes crash.** `-AlphaRestrict 1` with the default `-ModeMask` (0xCF) on mixed 0/255 alpha yields `validModeMask == 0` for affected blocks. Stock's search loop exits without setting `encodedBlock`, and the `if (!encodedBlock)` handler is a documented-as-error no-op — leaving the previous buffer contents as the encoded block. Non-deterministic garbage. A debug `assert` catches it, so it never trips in developer testing. | **Not reported upstream** |
 | 2 | **`CODECFLOAT` quality-precision truncation.** `-Quality` loses precision twice on the CLI path (`std::stof` at `cmdline.cpp:411`, then a `(CODECFLOAT)` cast at `compress.cpp:223`; `CODECFLOAT` is `typedef float`). `-Quality 0.45` arrives as `0.44999998807907104`, landing on the wrong side of a threshold comparison. `CODECFLOAT` is used in 484 places, so the fix needs care. | **Not reported upstream** |
 | 3 | **MSVC-vs-GCC discrepancy in the stock codec.** One file in the corpus (`ui_icon_mg36e`) reads 41.884 dB under MSVC vs. 41.89 dB recorded under GCC, in stock's float-heavy shaker refinement path. Checked at higher precision to rule out a rounding-boundary artifact — it's a real, tiny (≥0.005 dB) difference. | **Not reported upstream** — and not root-caused. No byte-level Linux reference exists for corpus outputs, so it couldn't be traced further. |
-
-> **Accuracy note:** `NOTES.md` records fixes and PR shapes for #1 and #2
-> as *recommendations* ("suitable candidate for a small standalone
-> upstream PR", "candidate for a small standalone upstream PR"), but
-> contains **no record of anything actually being filed, drafted or sent**
-> for any of the three — no issue numbers, no PR links, no dates. All
-> three are therefore listed as not reported. If any were in fact
-> submitted, that happened outside what `NOTES.md` documents.
-
-Issue #3 is worth reading with #1 and #2 in mind: this fork's own
-encoder output showed **zero** cross-platform divergence — every bc7e
-PSNR value and every verification MD5 reproduced exactly across
-GCC/Linux and MSVC/Windows.
 
 ## 8. Platform support
 
