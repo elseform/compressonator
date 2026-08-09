@@ -1,3 +1,272 @@
+# Compressonator + bc7enc_rdo (BC7 CPU codec swap)
+
+A fork of [AMD Compressonator](https://github.com/GPUOpen-Tools/compressonator)
+that replaces the CPU-side BC7 codec with the `bc7e.ispc` encoder from
+[richgel999/bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo).
+
+> This README section describes the fork. **Everything below the horizontal
+> rule is AMD's original README, unmodified.** The full investigation —
+> every measurement, dead end, and correction — lives in
+> [`NOTES.md`](../NOTES.md) in the parent repository.
+
+---
+
+## 1. What this fork is
+
+Compressonator's DDS I/O, mip generation, batch processing and CLI are
+excellent and kept entirely intact. What changed is one thing: the BC7
+block encoder underneath them.
+
+The motivation is a documented endpoint **p-bit rounding** issue in
+DirectXTex/texconv — its endpoint quantization doesn't properly compensate
+rounding for the chosen parity bit. Microsoft partially fixed the
+correctness bug in 2018 but never adopted the fully optimal "search all
+p-bit combinations with compensated rounding" approach. `bc7e.ispc`
+implements the correct approach and vectorizes it through ISPC, which also
+sidesteps the second problem: there is no cross-vendor, cross-platform
+GPU-accelerated BC7 path that behaves identically on AMD, NVIDIA and
+machines with no usable GPU at all. A CPU SIMD encoder doesn't need one.
+
+The p-bit issue is documented by Richard Geldreich in two April 2018
+posts:
+
+- ["A tale of multiple BC7 encoders"](http://richg42.blogspot.com/2018/04/a-tale-of-multiple-bc7-encoders.html)
+- ["Proper pbit computation in the BC7 texture format"](http://richg42.blogspot.com/2018/04/proper-pbit-computation-in-bc7-texture.html)
+
+This is built on two existing projects, not written from scratch:
+
+- **AMD Compressonator** — the surrounding tool, all container/format
+  handling, the CLI. MIT.
+- **bc7enc_rdo / `bc7e.ispc` by Richard Geldreich** — the BC7 encoder
+  doing the actual block compression. Apache 2.0.
+
+## 2. Usage
+
+**The codec is selected at build time, not at runtime.** There is no CLI
+flag to switch encoders — the selection is a compile-time `#ifdef`
+(`CMP_USE_BC7ENC_RDO` / `CMP_USE_BC7ENC_RDO_BATCH`, see
+`cmp_compressonatorlib/bc7/codec_bc7.cpp`). Build the flavor you want:
+
+| CMake options | Encoder used |
+|---|---|
+| *(neither set)* | Stock Compressonator BC7 (unchanged upstream behavior) |
+| `-DOPTION_CMP_USE_BC7ENC_RDO=ON` | bc7e.ispc, one block per call |
+| `-DOPTION_CMP_USE_BC7ENC_RDO=ON -DOPTION_CMP_USE_BC7ENC_RDO_BATCH=ON` | bc7e.ispc, SIMD-batched — **the recommended build** |
+
+Once built, invocation is ordinary Compressonator:
+
+```
+compressonatorcli -fd BC7 -EncodeWith CPU -Quality 1.0 in.png out.dds
+```
+
+### Existing flags still work — and were verified, not assumed
+
+`-Quality`, `-ModeMask`, `-ColourRestrict` and `-AlphaRestrict` all map
+onto bc7e's parameters and were checked against the stock codec's
+behavior. This mattered because the first implementation **got it wrong**:
+
+- The Q→preset bucketing was verified by MD5-comparing encodes at
+  interior quality values against the four bucket boundaries
+  (Q = 0.25 / 0.45 / 0.65 / 0.85). **2 of 4 boundaries initially
+  misresolved** — Q=0.45 landed in `fast` instead of `basic`, Q=0.65 in
+  `basic` instead of `slow`. See *Phase 3 part 4b* in `NOTES.md`.
+- Root cause turned out to be two float-precision truncations in series
+  on the CLI path — `std::stof` at `cmdline.cpp:411` and a
+  `(CODECFLOAT)` cast at `compress.cpp:223` (`CODECFLOAT` is
+  `typedef float`). *Phase 3 part 4b* first blamed `codec_bc7.cpp:131`;
+  that was traced and **corrected** in *Phase 3 part 4c* — that line sits
+  on a dead string-overload path the CLI never reaches.
+- Post-fix the boundary sweep is **9/9 exact** and the per-block and
+  batched paths are **bit-identical across 6 configurations, 100.0000%
+  block match** (14 976 or 30 000 blocks per config), including the
+  `-ColourRestrict` / `-AlphaRestrict` / `-ModeMask 255` combinations.
+
+## 3. What's different from stock, and why
+
+### Omitted from this build
+
+| Feature | Why |
+|---|---|
+| Image analysis (`-Analysis`, SSIM) | Requires OpenCV, which drags shared-library dependencies back in. Not on the BC7 encode path. |
+| KTX2 | Requires Git LFS assets and a working host Python at configure time. Not needed for DDS output. |
+| Brotli-G | Same — its configure step shells out to Python. |
+| GPU / DirectCompute encoding | This fork's whole premise is a CPU encoder that behaves identically everywhere. |
+| **ETC / ETC2** | **License scope — see below.** |
+
+**On ETC/ETC2:** Compressonator bundles ETCPack, which ships under an
+Ericsson SLA whose scope restricts use to Khronos-standard texture
+compression development. A general-purpose BC7 CLI that also happens to
+contain ETC codecs sits in ambiguous territory relative to that scope.
+Rather than interpret the SLA, this build removes the code: ETCPack is
+gated out at compile time behind `OPTION_CMP_ETC=OFF`. Verified by
+symbol and string audit on the built binaries — `CCodec_ETC` symbols
+**272 → 0**, `compressBlockETC` **47 → 0**, Ericsson SLA strings
+**4 → 0**. Requesting an ETC format now behaves exactly like requesting
+an unknown one (exit 255, no file written), rather than crashing or
+emitting garbage.
+
+*(Full honesty, per the audit: 3 `ETC2` symbols and 4 ETC format-name
+strings do survive. They are string literals from the format
+enum↔name lookup table at `applications/_plugins/common/atiformats.cpp:111-114`
+— format identifiers only, no Ericsson-authored code, no SLA text.)*
+
+### What you get in exchange
+
+Fully static, zero-runtime-dependency binaries on both platforms:
+
+| Platform | Result |
+|---|---|
+| **Linux** | **0 dynamic dependencies.** `ldd` reports *"not a dynamic executable"*. No libstdc++ version requirement, no OpenCV, no GL. |
+| **Windows** | **3 DLLs**, all shipped with the OS: `KERNEL32.dll`, `ole32.dll`, `imagehlp.dll`. No Visual C++ redistributable, no UCRT — `MSVCP140`, `VCRUNTIME140`, `VCRUNTIME140_1` and all ten `api-ms-win-crt-*` entries are gone (16 → 3). |
+
+Install-nothing on any modern glibc or Windows target. That is the point:
+this binary is meant to be shipped inside another tool and shelled out to.
+
+> **If you need the omitted features, run stock Compressonator alongside
+> this build.** They coexist fine — this fork is a specialized BC7
+> encoder, not a replacement for the full toolchain.
+
+## 4. Building
+
+Two canonical, tested build recipes. Prefer them over assembling flags by
+hand — they encode a long tail of platform-specific fixes.
+
+| Platform | Script |
+|---|---|
+| Linux | `tools/linux/build_flavor.sh [off\|unbatched\|batch]` |
+| Windows | `tools/win/build_cli_batch.ps1 -Flavor <off\|unbatched\|batch>` |
+
+Both live in this repository, and both expect to be run from a checkout
+where `compressonator/` and `bc7enc_rdo/` sit side by side — they resolve
+the outer root by walking up from their own location.
+
+The flavor parameter selects the encoder and the build directory:
+
+| Flavor | Encoder | Build dir |
+|---|---|---|
+| `off` | Stock Compressonator BC7 | `build_cli_off` |
+| `unbatched` | bc7e.ispc, per-block | `build_cli` |
+| `batch` | bc7e.ispc, SIMD-batched | `build_cli_batch` |
+
+`batch` is the default and the recommended build.
+
+### Prerequisites
+
+- **bc7enc_rdo checkout** next to this repository — the build validates
+  that `bc7e.ispc` is present and fails early if not.
+- **ISPC v1.31.0**, pinned. Linux expects it unpacked at
+  `tools/ispc/linux/bin/ispc`; the Windows script expects the equivalent
+  Windows package. The version is pinned deliberately — `bc7e.ispc` is
+  compiled by it.
+- A C++ toolchain. Verified on GCC (Linux) and MSVC 17.14 / Visual Studio
+  2022 Build Tools with Windows SDK 10.0.26100 (Windows).
+
+On Windows, `build_cli_batch.ps1` deliberately does **not** bootstrap the
+Visual Studio environment; `tools/win/build_flavor.bat` wraps it with
+`VsDevCmd.bat` if you want a one-shot invocation.
+
+## 5. Results
+
+Headline benchmark: 9-file corpus of real game textures (hard-alpha UI
+cutouts plus a 2048×2048 normal map), best-of-3 wall clock, alpha-aware
+PSNR with the decoder held constant across every variant.
+
+| Variant | Corpus wall clock | vs. batched bc7e |
+|---|---:|---|
+| texconv (DirectXTex CPU BC7, `-bc x`) | 175.350 s | **131× slower** |
+| Stock Compressonator `-Quality 1.0` | 16.392 s | **12.3× slower** |
+| Stock Compressonator, default quality | 2.213 s | 1.66× slower |
+| **Batched bc7e `-Quality 1.0`** | **1.336 s** | — |
+
+Quality, RGB PSNR restricted to pixels with source alpha > 0:
+
+- **vs. texconv:** batched bc7e wins on **every one of the 9 files**, by
+  **+1.91 to +13.51 dB** (median ≈ +2.6 dB). No dimension on which
+  texconv wins. The +13.51 dB outlier is a hard-alpha cutout icon where
+  texconv under-selects BC7 mode 7 (14.3% of blocks vs. 39.6% for both
+  stock and this fork) — consistent with the p-bit issue in §1.
+- **vs. stock at `-Quality 1.0`:** matched. Better on 4 files, worse on 5,
+  worst case 1.08 dB, no systematic direction. Same quality tier, 12.3×
+  faster.
+
+**Independently reproduced on a second machine, OS and compiler.** The
+above was measured on Linux/GCC (Ryzen 7 5800X); the full corpus was
+re-run on Windows/MSVC (Ryzen 7 5800H) and **26 of 27 recorded PSNR
+values reproduced digit-for-digit**. The single exception is in the
+*stock* codec's float path, not this fork's — see §7. Absolute times
+aren't comparable across those machines; the qualitative result is.
+
+Full tables, methodology and the investigation behind them:
+*Phase 3 part 6* and *Phase 4 part 4* in [`NOTES.md`](../NOTES.md).
+
+## 6. License and attribution
+
+Two licenses apply to the shipped binary:
+
+| Component | License |
+|---|---|
+| AMD Compressonator (AMD/ATI code paths) | MIT |
+| `bc7e.ispc` (richgel999/bc7enc_rdo) | Apache 2.0 |
+
+Both license texts must be included in any release. **The Apache 2.0
+side additionally requires the release to identify the incorporated
+Apache-2.0 component**, which is satisfied here:
+
+> This software incorporates **`bc7e.ispc`** from
+> [richgel999/bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo),
+> © Richard Geldreich, licensed under the Apache License, Version 2.0.
+
+ETCPack and its Ericsson SLA are **not** part of this build's license
+surface — see §3.
+
+## 7. Known upstream issues found during this work
+
+These are bugs in **stock Compressonator**, found while testing this
+fork's changes. They affect upstream regardless of this work.
+
+| # | Issue | Status |
+|---|---|---|
+| 1 | **Zero-valid-modes crash.** `-AlphaRestrict 1` with the default `-ModeMask` (0xCF) on mixed 0/255 alpha yields `validModeMask == 0` for affected blocks. Stock's search loop exits without setting `encodedBlock`, and the `if (!encodedBlock)` handler is a documented-as-error no-op — leaving the previous buffer contents as the encoded block. Non-deterministic garbage. A debug `assert` catches it, so it never trips in developer testing. | **Not reported upstream** |
+| 2 | **`CODECFLOAT` quality-precision truncation.** `-Quality` loses precision twice on the CLI path (`std::stof` at `cmdline.cpp:411`, then a `(CODECFLOAT)` cast at `compress.cpp:223`; `CODECFLOAT` is `typedef float`). `-Quality 0.45` arrives as `0.44999998807907104`, landing on the wrong side of a threshold comparison. `CODECFLOAT` is used in 484 places, so the fix needs care. | **Not reported upstream** |
+| 3 | **MSVC-vs-GCC discrepancy in the stock codec.** One file in the corpus (`ui_icon_mg36e`) reads 41.884 dB under MSVC vs. 41.89 dB recorded under GCC, in stock's float-heavy shaker refinement path. Checked at higher precision to rule out a rounding-boundary artifact — it's a real, tiny (≥0.005 dB) difference. | **Not reported upstream** — and not root-caused. No byte-level Linux reference exists for corpus outputs, so it couldn't be traced further. |
+
+> **Accuracy note:** `NOTES.md` records fixes and PR shapes for #1 and #2
+> as *recommendations* ("suitable candidate for a small standalone
+> upstream PR", "candidate for a small standalone upstream PR"), but
+> contains **no record of anything actually being filed, drafted or sent**
+> for any of the three — no issue numbers, no PR links, no dates. All
+> three are therefore listed as not reported. If any were in fact
+> submitted, that happened outside what `NOTES.md` documents.
+
+Issue #3 is worth reading with #1 and #2 in mind: this fork's own
+encoder output showed **zero** cross-platform divergence — every bc7e
+PSNR value and every verification MD5 reproduced exactly across
+GCC/Linux and MSVC/Windows.
+
+## 8. Platform support
+
+| Platform | Status |
+|---|---|
+| **Linux** | Built, verified, fully static (0 dynamic dependencies). |
+| **Windows** | Built, verified, statically linked (3 OS-shipped DLLs). |
+| **macOS** | **Out of scope.** Not built, not tested. Contributions welcome. |
+
+Cross-platform correctness is backed by byte-identical output, not by
+assertion. Every verification MD5 produced by the Windows/MSVC build
+matches the Linux/GCC reference exactly:
+
+| Check | Result |
+|---|---|
+| Centibucket boundary sweep | **9/9 exact MD5 match** |
+| Per-block vs. batched bit-identity | **6/6 configs, 100.0000% block match** |
+| Zero-valid-modes guard output | payload MD5 `7f359e51bc5c` on both platforms |
+
+The same three harnesses were re-run after every relink and code-removal
+pass in this project — the static-linking change and the ETC removal
+both had to prove they were byte-level no-ops before being accepted.
+
+---
+
 
 # Compressonator
 [![CMake](https://github.com/GPUOpen-Tools/compressonator/actions/workflows/cmake.yml/badge.svg)](https://github.com/GPUOpen-Tools/compressonator/actions/workflows/cmake.yml)
