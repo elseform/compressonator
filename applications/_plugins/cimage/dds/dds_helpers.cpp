@@ -912,7 +912,7 @@ bool SetupDDSD(DDSD2& ddsd2, const MipSet* pMipSet, bool bCompressed)
     return true;
 }
 
-bool SetupDDSD_DX10(DDSD2& ddsd2, const MipSet* pMipSet, bool /*bCompressed*/)
+bool SetupDDSD_DX10(DDSD2& ddsd2, const MipSet* pMipSet, bool bCompressed)
 {
     memset(&ddsd2, 0, sizeof(DDSD2));
     ddsd2.dwSize = sizeof(DDSD2);
@@ -924,7 +924,7 @@ bool SetupDDSD_DX10(DDSD2& ddsd2, const MipSet* pMipSet, bool /*bCompressed*/)
     ddsd2.dwWidth       = pMipSet->m_nWidth;
     ddsd2.dwHeight      = pMipSet->m_nHeight;
     ddsd2.dwMipMapCount = pMipSet->m_nMipLevels;
-    ddsd2.dwFlags       = DDSD_WIDTH | DDSD_HEIGHT;
+    ddsd2.dwFlags       = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
 
     ddsd2.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
     ddsd2.ddsCaps.dwCaps         = DDSCAPS_TEXTURE;
@@ -940,10 +940,18 @@ bool SetupDDSD_DX10(DDSD2& ddsd2, const MipSet* pMipSet, bool /*bCompressed*/)
         ddsd2.ddsCaps.dwCaps2 |= DDSCAPS2_VOLUME;
     }
 
+    if (bCompressed)
+    {
+        ddsd2.dwFlags |= DDSD_LINEARSIZE;
+        ddsd2.dwLinearSize = DDS_CMips->GetMipLevel(pMipSet, 0)->m_dwLinearSize;
+    }
+    else
+        ddsd2.dwFlags |= DDSD_PITCH;
+
     if (pMipSet->m_nMipLevels > 1)
     {
         ddsd2.dwFlags |= DDSD_MIPMAPCOUNT;
-        ddsd2.ddsCaps.dwCaps |= DDSCAPS_MIPMAP;
+        ddsd2.ddsCaps.dwCaps |= DDSCAPS_COMPLEX | DDSCAPS_MIPMAP;
     }
 
     return true;

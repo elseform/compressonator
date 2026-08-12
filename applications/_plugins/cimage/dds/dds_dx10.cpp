@@ -469,18 +469,7 @@ TC_PluginError SaveDDS_DX10(FILE* pFile, const MipSet* pMipSet)
 
     ddsd2.ddpfPixelFormat.dwFourCC = CMP_MAKEFOURCC('D', 'X', '1', '0');
 
-    switch (pMipSet->m_format)
-    {
-    case CMP_FORMAT_BC6H:
-    case CMP_FORMAT_BC6H_SF:
-        ddsd2.lPitch = ddsd2.dwWidth * 4;
-        break;
-    case CMP_FORMAT_BC7:
-    default:
-        ddsd2.lPitch = ddsd2.dwWidth * 4;
-        break;
-    }
-
+    // The pitch/linear size is now accurately populated in SetupDDSD_DX10
     // Write the data
     fwrite(&ddsd2, sizeof(DDSD2), 1, pFile);
 
