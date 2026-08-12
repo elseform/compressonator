@@ -209,6 +209,9 @@ void CMP_API CMP_Format2FourCC(CMP_FORMAT format, MipSet* pMipSet)
         break;
 
     case CMP_FORMAT_BC4:
+        pMipSet->m_dwFourCC = CMP_FOURCC_BC4U;
+        break;
+
     case CMP_FORMAT_ATI1N:
         pMipSet->m_dwFourCC = CMP_FOURCC_ATI1N;
         break;
@@ -222,6 +225,9 @@ void CMP_API CMP_Format2FourCC(CMP_FORMAT format, MipSet* pMipSet)
         break;
 
     case CMP_FORMAT_BC5:
+        pMipSet->m_dwFourCC = CMP_FOURCC_BC5U;
+        break;
+
     case CMP_FORMAT_ATI2N_XY:
         pMipSet->m_dwFourCC  = CMP_FOURCC_ATI2N;
         pMipSet->m_dwFourCC2 = CMP_FOURCC_ATI2N_XY;  // Swizzled format
