@@ -373,7 +373,7 @@ TC_PluginError LoadDDS_DX10_FourCC(FILE* pFile, DDSD2* pDDSD, MipSet* pMipSet, C
 
 DXGI_FORMAT GetDXGIFormat(const MipSet* pMipSet)
 {
-    if (pMipSet->m_dwFourCC == CMP_FOURCC_DX10)
+    if (pMipSet->m_format != CMP_FORMAT_Unknown)
     {
         switch (pMipSet->m_format)
         {

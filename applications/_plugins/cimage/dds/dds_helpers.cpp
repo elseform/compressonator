@@ -65,8 +65,19 @@ bool IsD3D10Format(const MipSet* pMipSet)
 
     if (pMipSet->m_dwFourCC == CMP_FOURCC_DX10)
         return true;
-    else
-        return false;
+        
+    if (pMipSet->m_format == CMP_FORMAT_BC4 || 
+        pMipSet->m_format == CMP_FORMAT_BC4_S ||
+        pMipSet->m_format == CMP_FORMAT_BC5 ||
+        pMipSet->m_format == CMP_FORMAT_BC5_S ||
+        pMipSet->m_format == CMP_FORMAT_BC6H ||
+        pMipSet->m_format == CMP_FORMAT_BC6H_SF ||
+        pMipSet->m_format == CMP_FORMAT_BC7)
+    {
+        return true;
+    }
+
+    return false;
 }
 
 void DetermineTextureType(const DDSD2* pDDSD, MipSet* pMipSet)
